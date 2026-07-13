@@ -14,10 +14,6 @@
   "navbar": {
     "links": [
       {
-        "label": "Suporte",
-        "href": "mailto:api@upscaledigital.com.br"
-      },
-      {
         "label": "Postman collection",
         "href": "https://github.com/upscaledigital/api-docs/raw/main/postman/upscale-api.postman_collection.json"
       }
