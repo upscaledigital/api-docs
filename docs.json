@@ -7,10 +7,6 @@
     "light": "#4B7DB8",
     "dark": "#0B2340"
   },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
   "favicon": "/favicon.svg",
   "navbar": {
     "links": [
@@ -22,12 +18,7 @@
         "label": "Postman collection",
         "href": "https://github.com/upscaledigital/api-docs/raw/main/postman/upscale-api.postman_collection.json"
       }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Solicitar chave",
-      "href": "mailto:api@upscaledigital.com.br?subject=Solicitação%20de%20chave%20de%20API"
-    }
+    ]
   },
   "navigation": {
     "groups": [
