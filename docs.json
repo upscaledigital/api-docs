@@ -8,6 +8,9 @@
     "dark": "#0B2340"
   },
   "favicon": "/favicon.svg",
+  "contextual": {
+    "options": []
+  },
   "navbar": {
     "links": [
       {
