@@ -1,0 +1,125 @@
+---
+title: 'Sincronização periódica de estoque e preço'
+description: 'Duas frequências: batch a cada 10 min (deltas acumulados) e imediata após cada venda no sistema integrado.'
+---
+
+## Dois modos de sync
+
+<CardGroup cols={2}>
+  <Card title="Batch periódico" icon="clock">
+    A cada **10 minutos**, envia deltas acumulados de estoque e preço. Otimiza rate limit e latência.
+  </Card>
+  <Card title="Imediato pós-venda" icon="bolt">
+    Após cada venda no sistema integrado, envia só o SKU vendido com o novo estoque. Reduz risco de overselling.
+  </Card>
+</CardGroup>
+
+## Batch a cada 10 minutos
+
+```javascript
+// pseudo-código do worker
+setInterval(async () => {
+  const deltas = await bufferDeStock.drain(); // pega tudo acumulado + limpa
+
+  if (deltas.length === 0) return;
+
+  // divide em batches de 500 (limite da API)
+  for (let i = 0; i < deltas.length; i += 500) {
+    const lote = deltas.slice(i, i + 500).map(d => ({
+      hunter_variante_id: d.sku,
+      quantidade: d.quantidadeAtual,
+    }));
+
+    await postComRetry(`${BASE_URL}/estoque`, { estoques: lote });
+  }
+}, 10 * 60 * 1000);
+```
+
+Mesmo padrão pra preço.
+
+## Imediato pós-venda
+
+Assim que uma venda for confirmada no sistema integrado, envie o novo estoque:
+
+```javascript
+async function onVendaConfirmada(sku, novaQuantidade) {
+  await postComRetry(`${BASE_URL}/estoque`, {
+    estoques: [
+      { hunter_variante_id: sku, quantidade: novaQuantidade },
+    ],
+  });
+}
+```
+
+<Note>
+Se você processa 100+ vendas por minuto, considere agrupar em micro-batches (janela de 2s + até 50 SKUs) pra não estourar rate limit. O ganho de "imediato" já cai muito depois de 2s.
+</Note>
+
+## Preço: mesmo padrão
+
+```javascript
+setInterval(async () => {
+  const deltasPreco = await bufferDePrecos.drain();
+
+  for (let i = 0; i < deltasPreco.length; i += 500) {
+    const lote = deltasPreco.slice(i, i + 500).map(d => ({
+      hunter_variante_id: d.sku,
+      preco: d.novoPreco,
+      preco_promocional: d.novaPromo, // pode ser null pra remover
+    }));
+
+    await postComRetry(`${BASE_URL}/precos`, { precos: lote });
+  }
+}, 10 * 60 * 1000);
+```
+
+## Tratamento de erros
+
+### 1. Variante não encontrada (207 Multi-Status)
+
+```json
+{
+  "hunter_variante_id": "VAR-999",
+  "acao": "erro",
+  "erro": "Variante com hunter_id 'VAR-999' não encontrada."
+}
+```
+
+Provavelmente essa variante foi criada no sistema integrado mas ainda não foi enviada via [`POST /variantes`](/api-reference/variantes/upsert). Verifique fluxo de cadastro; envie a variante antes de tentar de novo.
+
+### 2. Rate limit (429)
+
+Aguarde `Retry-After` segundos, retente. Ver [Rate Limits](/rate-limits).
+
+### 3. Erro 5xx
+
+Backoff exponencial: 1s, 2s, 4s, 8s, 16s. Máx 5 tentativas.
+
+## Boas práticas
+
+<Tip>
+**Sempre batch quando puder.** 500 chamadas de 1 SKU = 500 requests. 1 chamada de 500 SKUs = 1 request. Ambos gastam ~1s de compute do servidor — mas a primeira gasta 500 unidades do seu rate limit.
+</Tip>
+
+- Use fila local (BullMQ, Sidekiq, etc) pra desacoplar "detectar mudança" de "chamar API"
+- Se sua janela de 10 min tem picos > 500 mudanças, quebre em micro-lotes de 500 e rode em sequência (com pause de 100ms entre eles pra não bater rate limit)
+- Log só erros — sucessos podem ser aggregate (`123 SKUs atualizados`) pra não poluir
+- Após batch, valide contra `GET /produtos?hunter_id=<amostra>` pra checar consistência
+
+## Divergência de estoque
+
+Se você suspeitar que o estoque na loja divergiu do sistema integrado (bug local, envio perdido, corrupção), faça **sync full** temporariamente:
+
+```javascript
+// Uma vez, sob demanda:
+const todosSKUs = await sistemaIntegradoListarTudo();
+for (let i = 0; i < todosSKUs.length; i += 500) {
+  const lote = todosSKUs.slice(i, i + 500).map(s => ({
+    hunter_variante_id: s.sku,
+    quantidade: s.estoqueAtual,
+  }));
+  await postComRetry(`${BASE_URL}/estoque`, { estoques: lote });
+}
+```
+
+Sync full é oneroso mas idempotente — nada quebra.

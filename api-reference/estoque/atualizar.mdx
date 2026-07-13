@@ -1,0 +1,147 @@
+---
+title: 'Atualizar estoque'
+api: 'POST /api/hunter/v1/estoque'
+description: 'Atualização em lote de estoque por SKU. Requer variantes já cadastradas.'
+---
+
+## Comportamento
+
+Atualiza a quantidade disponível de cada variante identificada por `hunter_variante_id`. Loja substitui integralmente pelo valor enviado (não é delta).
+
+<Note>
+Chame este endpoint **após cada venda no sistema integrado** e **em batch a cada 10 minutos** para deltas acumulados. Ver [Fluxo de estoque](/guides/fluxo-estoque).
+</Note>
+
+## Payload
+
+<ParamField body="estoques" type="array" required>
+  Lista de atualizações. **Máx 500 por request.**
+</ParamField>
+
+<ParamField body="estoques[].hunter_variante_id" type="string" required>
+  Identificador da variante no sistema integrado.
+</ParamField>
+
+<ParamField body="estoques[].quantidade" type="integer" required>
+  Nova quantidade disponível. Inteiro, `>= 0`.
+</ParamField>
+
+<Warning>
+**Não envie** o campo `estoque_reservado` — a loja gerencia (é incrementado no checkout, decrementado no cancelamento). Se enviar, response é `HTTP 400 VALIDATION`.
+</Warning>
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/estoque \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "estoques": [
+      { "hunter_variante_id": "VAR-001", "quantidade": 50 },
+      { "hunter_variante_id": "VAR-002", "quantidade": 30 },
+      { "hunter_variante_id": "VAR-003", "quantidade": 0 }
+    ]
+  }'
+```
+
+```javascript Node.js
+const res = await fetch(`${BASE_URL}/estoque`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": process.env.API_KEY,
+  },
+  body: JSON.stringify({
+    estoques: deltas.map(d => ({
+      hunter_variante_id: d.sku,
+      quantidade: d.stock,
+    })),
+  }),
+});
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 (todos atualizados)
+{
+  "success": true,
+  "data": {
+    "processados": 3,
+    "atualizados": 3,
+    "erros": 0,
+    "resultados": [
+      {
+        "hunter_variante_id": "VAR-001",
+        "variante_id": "uuid-1",
+        "quantidade_nova": 50,
+        "acao": "atualizado"
+      },
+      {
+        "hunter_variante_id": "VAR-002",
+        "variante_id": "uuid-2",
+        "quantidade_nova": 30,
+        "acao": "atualizado"
+      },
+      {
+        "hunter_variante_id": "VAR-003",
+        "variante_id": "uuid-3",
+        "quantidade_nova": 0,
+        "acao": "atualizado"
+      }
+    ],
+    "parcial": false,
+    "totalmente_falho": false
+  }
+}
+```
+
+```json 207 (variante desconhecida)
+{
+  "success": true,
+  "data": {
+    "processados": 2,
+    "atualizados": 1,
+    "erros": 1,
+    "resultados": [
+      {
+        "hunter_variante_id": "VAR-001",
+        "variante_id": "uuid-1",
+        "quantidade_nova": 50,
+        "acao": "atualizado"
+      },
+      {
+        "hunter_variante_id": "VAR-INEXISTENTE",
+        "variante_id": null,
+        "quantidade_nova": null,
+        "acao": "erro",
+        "erro": "Variante com hunter_id 'VAR-INEXISTENTE' não encontrada. Envie primeiro via POST /variantes."
+      }
+    ],
+    "parcial": true,
+    "totalmente_falho": false
+  }
+}
+```
+
+</ResponseExample>
+
+## Erros específicos
+
+| Situação | Comportamento |
+|---|---|
+| Variante não encontrada | Erro **individual** — outros itens seguem |
+| `quantidade < 0` | Erro individual de validação |
+| Campo `estoque_reservado` presente | Lote inteiro rejeitado com `400 VALIDATION` |
+
+## Boas práticas
+
+<Tip>
+**Não** faça 500 chamadas individuais em vez de 1 chamada em lote. Consome rate limit sem necessidade e leva ~50x mais tempo.
+</Tip>
+
+- Agregue deltas de estoque num buffer temporal (10 minutos) e envie tudo junto
+- Após cada venda: envie **imediato** só o SKU vendido (pra não overselling)
+- Estoque `0` é valor válido (produto zerado, pode ficar visível pra cliente escolher entrar em lista de espera)

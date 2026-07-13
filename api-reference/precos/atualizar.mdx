@@ -1,0 +1,105 @@
+---
+title: 'Atualizar preços'
+api: 'POST /api/hunter/v1/precos'
+description: 'Atualização em lote de preço e promoção por SKU.'
+---
+
+## Comportamento
+
+Atualiza `preco` (obrigatório) e opcionalmente `preco_promocional` de cada variante.
+
+- Se `preco_promocional` **está no payload** e é um número: seta a promoção (deve ser menor que `preco`)
+- Se `preco_promocional: null` explicitamente: **remove** a promoção
+- Se `preco_promocional` **ausente** do payload: mantém o valor atual (não sobrescreve)
+
+## Payload
+
+<ParamField body="precos" type="array" required>
+  Lista de atualizações. **Máx 500 por request.**
+</ParamField>
+
+<ParamField body="precos[].hunter_variante_id" type="string" required>
+  Identificador da variante no sistema integrado.
+</ParamField>
+
+<ParamField body="precos[].preco" type="number" required>
+  Preço "cheio". Deve ser `> 0`.
+</ParamField>
+
+<ParamField body="precos[].preco_promocional" type="number | null">
+  Preço promocional. Se preenchido, deve ser menor que `preco`. `null` explícito remove a promoção. Ausência mantém valor atual.
+</ParamField>
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/precos \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "precos": [
+      { "hunter_variante_id": "VAR-001", "preco": 89.90, "preco_promocional": 69.90 },
+      { "hunter_variante_id": "VAR-002", "preco": 129.90, "preco_promocional": null },
+      { "hunter_variante_id": "VAR-003", "preco": 49.90 }
+    ]
+  }'
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "success": true,
+  "data": {
+    "processados": 3,
+    "atualizados": 3,
+    "erros": 0,
+    "resultados": [
+      { "hunter_variante_id": "VAR-001", "variante_id": "uuid-1", "acao": "atualizado" },
+      { "hunter_variante_id": "VAR-002", "variante_id": "uuid-2", "acao": "atualizado" },
+      { "hunter_variante_id": "VAR-003", "variante_id": "uuid-3", "acao": "atualizado" }
+    ],
+    "parcial": false,
+    "totalmente_falho": false
+  }
+}
+```
+
+```json 400 (preco_promocional >= preco)
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION",
+    "message": "Payload inválido — veja details pra campos com erro.",
+    "details": [
+      {
+        "path": "precos.0.preco_promocional",
+        "message": "preco_promocional deve ser menor que preco.",
+        "code": "custom"
+      }
+    ]
+  }
+}
+```
+
+</ResponseExample>
+
+## Erros específicos
+
+| Situação | Comportamento |
+|---|---|
+| Variante não encontrada | Erro **individual** |
+| `preco <= 0` | Erro individual de validação |
+| `preco_promocional >= preco` | Erro individual (falha o item, outros do lote seguem) |
+| Todos os itens falham a validação | Lote inteiro rejeitado com `400 VALIDATION` |
+
+## Regras de negócio
+
+<Info>
+Preços em real brasileiro, sempre com **2 casas decimais**. A loja armazena como `DECIMAL(10,2)`. Enviar `89.9` ou `89.90` produz o mesmo resultado (89,90). Não enviar mais de 2 casas — arredondamento é responsabilidade do integrador.
+</Info>
+
+- Preço zero **não é aceito** — variante sem preço definido (produto novo) fica com `preco=0` no banco por default, mas isso é estado transitório. Enviar `preco=0` explicitamente é rejeitado.
+- Remover promoção **sem alterar preço**: envie `preco` com valor atual + `preco_promocional: null`. Se você não sabe o preço atual, faça primeiro [GET /produtos?hunter_id=...](/api-reference/produtos/listar) pra descobrir.

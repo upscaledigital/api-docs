@@ -1,0 +1,177 @@
+---
+title: 'Criar / atualizar variantes'
+api: 'POST /api/hunter/v1/variantes'
+description: 'Upsert em lote de variantes vinculadas a um produto pai.'
+---
+
+## Comportamento
+
+Cada variante é vinculada a um produto pai via `produto_hunter_id`. O produto pai precisa **já estar cadastrado** (via [POST /produtos](/api-reference/produtos/criar)).
+
+- **Criada** se `hunter_id` novo.
+- **Atualizada** se `hunter_id` já cadastrado.
+
+Variante nova entra com `ativa=false`. Loja ativa após revisar.
+
+## Payload
+
+<ParamField body="variantes" type="array" required>
+  Lista de variantes. **Máx 500 por request.**
+</ParamField>
+
+<ParamField body="variantes[].hunter_id" type="string" required>
+  Identificador único da variante no sistema integrado. Chave de idempotência.
+</ParamField>
+
+<ParamField body="variantes[].produto_hunter_id" type="string" required>
+  `hunter_id` do produto pai. Se não encontrar na loja, variante entra em `resultados[].erro`.
+</ParamField>
+
+<ParamField body="variantes[].sku_variante" type="string" required>
+  SKU único da variante. Constraint UNIQUE — 2 variantes não podem compartilhar SKU.
+</ParamField>
+
+<ParamField body="variantes[].tamanho" type="string" />
+
+<ParamField body="variantes[].cor_nome" type="string" />
+
+<ParamField body="variantes[].cor_hex" type="string">
+  Formato `#RRGGBB` (ex: `#000000`). Se enviado, validado.
+</ParamField>
+
+<ParamField body="variantes[].peso_kg" type="number" required>
+  Mínimo `0.001` (1 grama). Obrigatório.
+</ParamField>
+
+<ParamField body="variantes[].altura_cm" type="number" />
+<ParamField body="variantes[].largura_cm" type="number" />
+<ParamField body="variantes[].profundidade_cm" type="number" />
+
+<ParamField body="variantes[].preco" type="number">
+  Preço "cheio". Se ausente, entra como `0` na criação.
+</ParamField>
+
+<ParamField body="variantes[].preco_promocional" type="number | null">
+  Preço promocional. Deve ser **menor** que `preco`, senão erro individual. `null` explícito remove a promo.
+</ParamField>
+
+<ParamField body="variantes[].estoque" type="integer">
+  Quantidade inicial. Se ausente, entra como `0`.
+</ParamField>
+
+<ParamField body="variantes[].codigo_barras" type="string" />
+
+<Warning>
+**Não envie** os campos `ativa` e `ordem` — a loja controla. Se enviar, response é `HTTP 400 VALIDATION`.
+</Warning>
+
+## Comportamento no INSERT
+
+Uma variante nova entra com:
+
+- `ativa=false` (loja ativa manualmente)
+- `preco=0` se não veio no payload
+- `estoque=0` se não veio
+
+## Comportamento no UPDATE
+
+- Nunca toca em `ativa` nem `ordem`
+- Atualiza apenas campos presentes no payload (ausente = mantém valor atual)
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/variantes \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "variantes": [
+      {
+        "hunter_id": "VAR-001",
+        "produto_hunter_id": "PROD-001",
+        "sku_variante": "SKU-001-P-PT",
+        "tamanho": "P",
+        "cor_nome": "PRETO",
+        "cor_hex": "#000000",
+        "peso_kg": 0.15,
+        "preco": 89.90,
+        "preco_promocional": 69.90,
+        "estoque": 50,
+        "codigo_barras": "7891234567890"
+      }
+    ]
+  }'
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "success": true,
+  "data": {
+    "processados": 1,
+    "criados": 1,
+    "atualizados": 0,
+    "erros": 0,
+    "resultados": [
+      {
+        "hunter_id": "VAR-001",
+        "variante_id": "415966ed-df11-484e-8694-af91f15e3410",
+        "acao": "criado"
+      }
+    ],
+    "parcial": false,
+    "totalmente_falho": false
+  }
+}
+```
+
+```json 400 ('ativa' rejeitado)
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION",
+    "details": [
+      {
+        "path": "variantes.0.ativa",
+        "message": "Campo 'ativa' é gerenciado pela loja, não deve ser enviado."
+      }
+    ]
+  }
+}
+```
+
+```json 207 (produto pai não existe)
+{
+  "success": true,
+  "data": {
+    "processados": 1,
+    "criados": 0,
+    "erros": 1,
+    "resultados": [
+      {
+        "hunter_id": "VAR-001",
+        "variante_id": null,
+        "acao": "erro",
+        "erro": "Produto pai com hunter_id 'PROD-INEXISTENTE' não encontrado. Envie primeiro via POST /produtos."
+      }
+    ],
+    "parcial": false,
+    "totalmente_falho": true
+  }
+}
+```
+
+</ResponseExample>
+
+## Erros específicos
+
+| Situação | Comportamento |
+|---|---|
+| Produto pai não existe | Erro **individual** no `resultados[]` — outros itens do lote seguem |
+| `sku_variante` já existe em outra variante | Erro individual — SKU tem constraint UNIQUE |
+| `preco_promocional >= preco` | Erro individual de validação |
+| Campo `ativa` ou `ordem` presente | Lote inteiro rejeitado com `400 VALIDATION` |
+| `peso_kg < 0.001` | Erro individual (loja tem CHECK `> 0` em gramas) |

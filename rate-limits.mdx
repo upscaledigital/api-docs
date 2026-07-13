@@ -1,0 +1,102 @@
+---
+title: 'Rate Limits'
+description: '100 requests por minuto por chave, compartilhado entre todos os endpoints.'
+---
+
+## Limite
+
+**100 requests por minuto por chave**, compartilhado entre todos os endpoints. Se você fizer 50 requests em `/estoque` + 60 em `/precos` no mesmo minuto = 110, o 101º cai em `429`.
+
+## Resposta ao exceder
+
+Ao ultrapassar, o próximo request recebe:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+
+{
+  "success": false,
+  "error": {
+    "code": "RATE_LIMIT",
+    "message": "Limite de 100 requests/min ultrapassado. Tente novamente em 42s."
+  }
+}
+```
+
+O header `Retry-After` traz **segundos** até a janela liberar.
+
+## Estratégia de retentativa recomendada
+
+<Steps>
+  <Step title="Detecte o 429">
+    Cheque `response.status === 429` ou `response.error.code === "RATE_LIMIT"`.
+  </Step>
+  <Step title="Leia Retry-After">
+    Use o valor do header como tempo de espera (em segundos). Se ausente, use fallback de 60 segundos.
+  </Step>
+  <Step title="Aguarde">
+    `sleep(retry_after)` antes de retentar. **Não** faça backoff exponencial em cima disso — a resposta já traz o tempo exato.
+  </Step>
+  <Step title="Retente uma vez">
+    Se ainda vier `429`, use jitter (backoff aleatório de 5–15s) pra evitar sincronização com outros integradores.
+  </Step>
+</Steps>
+
+<CodeGroup>
+
+```javascript Node.js
+async function withRateLimit(fn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    const res = await fn();
+    if (res.status !== 429) return res;
+    const retryAfter = parseInt(res.headers.get("Retry-After") ?? "60", 10);
+    await new Promise((r) => setTimeout(r, retryAfter * 1000));
+  }
+  throw new Error("Rate limit não liberou após retries");
+}
+```
+
+```python Python
+import time
+
+def with_rate_limit(call, max_retries=3):
+    for i in range(max_retries):
+        res = call()
+        if res.status_code != 429:
+            return res
+        retry_after = int(res.headers.get("Retry-After", 60))
+        time.sleep(retry_after)
+    raise RuntimeError("Rate limit não liberou após retries")
+```
+
+</CodeGroup>
+
+## Boas práticas pra evitar rate limit
+
+### 1. Use batches (até 500 itens)
+
+Em vez de 500 chamadas de `POST /estoque` com 1 SKU cada, faça 1 chamada com 500 SKUs. Isso reduz drasticamente uso de rate limit e latência.
+
+### 2. Controle concorrência do lado do integrador
+
+Se você tem 3 processos rodando estoque simultâneos, eles disputam a mesma cota. Use fila (BullMQ, Sidekiq, Celery, etc) com concurrency = 1 pra sincronizações que precisam ser sequenciais.
+
+### 3. Sync incremental, não full
+
+- Use `updated_since` no `GET /produtos` e `GET /pedidos` — só puxa o que mudou
+- Guarde o `atualizado_em` do último item processado como cursor
+
+### 4. Separe chaves por integração
+
+Se o mesmo integrador tem 2 casos de uso muito distintos (ex: sync de catálogo vs pull de pedidos), peça 2 chaves separadas. Cada uma tem sua cota de 100/min.
+
+## Escalabilidade
+
+O rate limit atual é **in-memory por instância** do backend da loja. Em cenários com mais de uma instância rodando em paralelo (deploy multi-region ou auto-scaling), o limite efetivo pode escalar até `100 × N`. Aceitável pro volume atual — se você precisar de garantias mais rígidas (Redis-backed shared limit), abra ticket no suporte.
+
+## Como testar sem exceder
+
+- Ambiente de staging (quando disponível) tem o mesmo limite mas dados isolados — pode estressar sem afetar produção
+- Rode com `curl -w "@time-fmt"` pra medir tempo entre requests
+- Em desenvolvimento local, o backend responde do mesmo endpoint — comportamento idêntico

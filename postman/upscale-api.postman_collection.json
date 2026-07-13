@@ -1,0 +1,197 @@
+{
+  "info": {
+    "_postman_id": "8f2c3d4e-5b6a-4c7d-8e9f-0a1b2c3d4e5f",
+    "name": "Upscale Commerce API",
+    "description": "Integração da plataforma Upscale Commerce com ERPs, gateways e sistemas externos. Configure as variáveis `base_url` e `api_key` na collection antes de rodar.\n\n**Docs completa:** https://api.upscaledigital.com.br",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://{loja-cliente}.com.br/api/hunter/v1",
+      "description": "URL base da API. Substitua {loja-cliente} pelo domínio da loja parceira."
+    },
+    {
+      "key": "api_key",
+      "value": "hk_...",
+      "description": "Chave de API vinculada à loja."
+    }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key" },
+      { "key": "value", "value": "{{api_key}}" },
+      { "key": "in", "value": "header" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Produtos",
+      "item": [
+        {
+          "name": "POST /produtos — criar/atualizar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/produtos",
+              "host": ["{{base_url}}"],
+              "path": ["produtos"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"produtos\": [\n    {\n      \"hunter_id\": \"PROD-001\",\n      \"nome\": \"Produto Exemplo A\",\n      \"descricao\": \"Descrição textual do produto.\",\n      \"categoria_hunter_id\": \"CAT-01\",\n      \"sku_base\": \"SKU-001\",\n      \"marca\": \"Marca Exemplo\",\n      \"genero\": \"feminino\",\n      \"peso_kg\": 0.15,\n      \"altura_cm\": 10.0,\n      \"largura_cm\": 20.0,\n      \"profundidade_cm\": 3.0\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /produtos — listar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/produtos?page=1&per_page=100",
+              "host": ["{{base_url}}"],
+              "path": ["produtos"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Página (default 1)" },
+                { "key": "per_page", "value": "100", "description": "Itens por página (max 500)" },
+                { "key": "hunter_id", "value": "", "description": "Filtro por hunter_id (opcional)", "disabled": true },
+                { "key": "updated_since", "value": "", "description": "ISO 8601 UTC (opcional)", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Variantes",
+      "item": [
+        {
+          "name": "POST /variantes — criar/atualizar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/variantes",
+              "host": ["{{base_url}}"],
+              "path": ["variantes"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variantes\": [\n    {\n      \"hunter_id\": \"VAR-001\",\n      \"produto_hunter_id\": \"PROD-001\",\n      \"sku_variante\": \"SKU-001-P-PT\",\n      \"tamanho\": \"P\",\n      \"cor_nome\": \"PRETO\",\n      \"cor_hex\": \"#000000\",\n      \"peso_kg\": 0.15,\n      \"preco\": 89.90,\n      \"preco_promocional\": 69.90,\n      \"estoque\": 50,\n      \"codigo_barras\": \"7891234567890\"\n    }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Estoque",
+      "item": [
+        {
+          "name": "POST /estoque — atualizar em lote",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/estoque",
+              "host": ["{{base_url}}"],
+              "path": ["estoque"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"estoques\": [\n    { \"hunter_variante_id\": \"VAR-001\", \"quantidade\": 50 },\n    { \"hunter_variante_id\": \"VAR-002\", \"quantidade\": 30 }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Preços",
+      "item": [
+        {
+          "name": "POST /precos — atualizar em lote",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/precos",
+              "host": ["{{base_url}}"],
+              "path": ["precos"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"precos\": [\n    { \"hunter_variante_id\": \"VAR-001\", \"preco\": 89.90, \"preco_promocional\": 69.90 },\n    { \"hunter_variante_id\": \"VAR-002\", \"preco\": 129.90, \"preco_promocional\": null }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pedidos",
+      "item": [
+        {
+          "name": "GET /pedidos — pull incremental",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/pedidos?limit=100",
+              "host": ["{{base_url}}"],
+              "path": ["pedidos"],
+              "query": [
+                { "key": "limit", "value": "100", "description": "Máx 200" },
+                { "key": "updated_since", "value": "", "description": "ISO 8601 UTC — cursor incremental", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /pedidos/{codigo}/processado — confirmar NF",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/pedidos/PED-000123/processado",
+              "host": ["{{base_url}}"],
+              "path": ["pedidos", "PED-000123", "processado"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nota_fiscal\": {\n    \"numero\": \"000000123\",\n    \"serie\": \"1\",\n    \"chave_acesso\": \"35240712345678000199550010000001231234567890\",\n    \"data_emissao\": \"2026-07-13T10:15:00Z\",\n    \"url_danfe\": \"https://storage.exemplo.com/danfe/xyz.pdf\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /pedidos/{codigo}/rastreio — registrar/corrigir rastreio",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/pedidos/PED-000123/rastreio",
+              "host": ["{{base_url}}"],
+              "path": ["pedidos", "PED-000123", "rastreio"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codigo_rastreio\": \"AA123456789BR\",\n  \"transportadora\": \"Correios PAC\",\n  \"url_rastreio\": \"https://rastreamento.correios.com.br/app/index.php?objetos=AA123456789BR\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

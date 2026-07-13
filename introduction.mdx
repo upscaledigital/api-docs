@@ -1,0 +1,139 @@
+---
+title: 'Introdução'
+description: 'API da plataforma Upscale Commerce para integração com sistemas externos (ERPs, gateways, marketplaces).'
+---
+
+## O que é
+
+A **Upscale Commerce API** é o ponto de integração entre a plataforma de e-commerce e sistemas externos que precisam sincronizar catálogo, estoque, preço e pedidos.
+
+O caso de uso típico é um **ERP** que:
+
+- Empurra catálogo, estoque e preço pra loja online
+- Puxa pedidos aprovados pra emitir nota fiscal, baixar estoque e postar
+- Devolve status pra loja (código de rastreio, confirmação de NF)
+
+## Divisão de responsabilidades
+
+A API foi desenhada com uma linha clara entre o que é do ERP e o que é da loja:
+
+| Domínio | Fonte de verdade |
+|---|---|
+| Catálogo fiscal (produto, SKU) | Sistema integrado (ERP) |
+| Estoque e preço | Sistema integrado (ERP) |
+| Emissão de nota fiscal | Sistema integrado (ERP) |
+| Rastreio (código, transportadora, URL) | Sistema integrado (ERP) |
+| Conteúdo editorial (descrição rica, fotos, banners, cupons, SEO) | Loja |
+| Ativação/desativação (`ativo`, `destaque`, `lancamento`) | Loja |
+| Slug, ordem, ficha técnica | Loja |
+| Cadastro de cliente + endereço | Loja (via checkout) |
+
+<Note>
+A loja **nunca** aceita campos como `ativo`, `ativa`, `ordem`, `estoque_reservado` vindos da API — são gerenciados exclusivamente pela loja. Enviar esses campos resulta em `HTTP 400 VALIDATION`.
+</Note>
+
+## Ambiente
+
+Todos os endpoints ficam sob o prefixo `/api/hunter/v1/` na URL base da loja.
+
+<CodeGroup>
+
+```bash Produção
+https://{loja-cliente}.com.br/api/hunter/v1
+```
+
+```bash Staging (quando disponível)
+https://staging.{loja-cliente}.com.br/api/hunter/v1
+```
+
+</CodeGroup>
+
+<Info>
+A URL exata varia por cliente. Sua chave de acesso é vinculada a uma loja específica. Peça a URL pra equipe de integração da Upscale ou pra loja parceira.
+</Info>
+
+## Estrutura de resposta
+
+Todo response é JSON, com formato padronizado.
+
+### Sucesso
+
+```json
+{
+  "success": true,
+  "data": {
+    ...
+  }
+}
+```
+
+### Erro
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION",
+    "message": "Payload inválido — veja details pra campos com erro.",
+    "details": [ ... ]
+  }
+}
+```
+
+Veja [Códigos de erro](/errors) pra lista completa dos códigos possíveis.
+
+## Idempotência
+
+Todos os endpoints de escrita são **idempotentes por chave natural**:
+
+- `POST /produtos` — chave: `hunter_id`
+- `POST /variantes` — chave: `hunter_id`
+- `POST /estoque` — chave: `hunter_variante_id`
+- `POST /precos` — chave: `hunter_variante_id`
+- `POST /pedidos/{codigo}/processado` — chave: `codigo` (idempotência estrita — segunda chamada retorna `409 CONFLICT`)
+- `POST /pedidos/{codigo}/rastreio` — chave: `codigo` (idempotência aberta — segunda chamada sobrescreve, útil pra corrigir código de rastreio errado)
+
+Reenvios são seguros: se conexão cair no meio de um POST, pode retentar sem risco de duplicação.
+
+## Batches
+
+Endpoints de escrita aceitam **até 500 itens por request**. Excedeu, resposta `HTTP 400`.
+
+Cada item do lote é processado individualmente — se 3 de 500 falham por SKU inexistente, os outros 497 seguem. O response traz `resultados[]` com o status de cada item:
+
+- `HTTP 200` — tudo processado com sucesso
+- `HTTP 207 Multi-Status` — parcial (alguns itens falharam individualmente)
+- `HTTP 400` — payload inválido OU todos os itens falharam
+
+## Próximos passos
+
+<CardGroup cols={2}>
+  <Card
+    title="Autenticação"
+    icon="key"
+    href="/authentication"
+  >
+    Como obter uma chave de API e autenticar requests
+  </Card>
+  <Card
+    title="Rate Limits"
+    icon="gauge"
+    href="/rate-limits"
+  >
+    Limites de chamadas por minuto e como tratar `429`
+  </Card>
+  <Card
+    title="Sincronização de catálogo"
+    icon="folder-tree"
+    href="/guides/fluxo-catalogo"
+  >
+    Guia passo a passo da carga inicial
+  </Card>
+  <Card
+    title="Pull de pedidos"
+    icon="rotate"
+    href="/guides/fluxo-pedidos"
+  >
+    Como consumir pedidos com cursor incremental
+  </Card>
+</CardGroup>

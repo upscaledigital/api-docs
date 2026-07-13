@@ -1,0 +1,179 @@
+---
+title: 'Confirmar processamento (NF emitida)'
+api: 'POST /api/hunter/v1/pedidos/{codigo}/processado'
+description: 'Confirma que o pedido teve estoque baixado + NF emitida. Idempotência ESTRITA — segunda chamada retorna 409.'
+---
+
+## Comportamento
+
+Chame após emitir a nota fiscal do pedido. Este endpoint:
+
+1. Cria registro em `notas_fiscais` com os dados da NF
+2. Transiciona pedido: `pagamento_aprovado → em_separacao`
+3. Marca `hunter_processado_em = NOW()` no pedido
+4. Registra evento no histórico com motivo `processado_pelo_hunter`
+
+Tudo em **transação atômica** no banco — se qualquer passo falhar, rollback total.
+
+<Warning>
+**Idempotência ESTRITA:** este endpoint **rejeita segunda chamada** no mesmo pedido (`HTTP 409`). Diferente de `/rastreio` que aceita sobrescrita, a NF é evento irreversível — se você tenta reenviar por retry após timeout, use o `hunter_processado_em` no `GET /pedidos` pra descobrir que já foi processado.
+</Warning>
+
+## Path param
+
+<ParamField path="codigo" type="string" required>
+  Código do pedido (ex: `PED-000123`), obtido no `GET /pedidos`.
+</ParamField>
+
+## Payload
+
+<ParamField body="nota_fiscal" type="object" required>
+  <Expandable title="nota_fiscal">
+    <ParamField body="numero" type="string" required>
+      Número da NF-e. 1–50 caracteres.
+    </ParamField>
+
+    <ParamField body="serie" type="string" required>
+      Série da NF-e. 1–20 caracteres.
+    </ParamField>
+
+    <ParamField body="chave_acesso" type="string" required>
+      **Exatamente 44 dígitos numéricos.** Constraint UNIQUE — se já existir em outro pedido, retorna `409 CONFLICT`.
+    </ParamField>
+
+    <ParamField body="data_emissao" type="string (ISO 8601 UTC)" required>
+      Ex: `"2026-07-13T10:15:00Z"`.
+    </ParamField>
+
+    <ParamField body="url_danfe" type="string (URL)">
+      Opcional. Link pro PDF da DANFE hospedado no lado do integrador ou storage.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/pedidos/PED-000123/processado \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "nota_fiscal": {
+      "numero": "000000123",
+      "serie": "1",
+      "chave_acesso": "35240712345678000199550010000001231234567890",
+      "data_emissao": "2026-07-13T10:15:00Z",
+      "url_danfe": "https://storage.exemplo.com/danfe/xyz.pdf"
+    }
+  }'
+```
+
+```javascript Node.js
+const res = await fetch(
+  `${BASE_URL}/pedidos/${codigo}/processado`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": process.env.API_KEY,
+    },
+    body: JSON.stringify({
+      nota_fiscal: {
+        numero: nfe.numero,
+        serie: nfe.serie,
+        chave_acesso: nfe.chave,
+        data_emissao: nfe.emitidaEm.toISOString(),
+        url_danfe: nfe.pdfUrl,
+      },
+    }),
+  }
+);
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "success": true,
+  "data": {
+    "pedido": {
+      "codigo": "PED-000123",
+      "status": "em_separacao",
+      "processado_em": "2026-07-13T10:15:03Z"
+    },
+    "nota_fiscal": {
+      "id": "b9810ec1-7920-4c33-a7f7-9d5ffa66f1e0",
+      "numero": "000000123",
+      "serie": "1"
+    }
+  }
+}
+```
+
+```json 404 (pedido não existe)
+{
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Pedido com código 'PED-INEXISTENTE' não encontrado."
+  }
+}
+```
+
+```json 409 (já processado)
+{
+  "success": false,
+  "error": {
+    "code": "CONFLICT",
+    "message": "Pedido 'PED-000123' já processado pelo sistema integrado em 2026-07-13 10:15:03+00."
+  }
+}
+```
+
+```json 409 (status errado)
+{
+  "success": false,
+  "error": {
+    "code": "CONFLICT",
+    "message": "Pedido 'PED-000123' está em status 'cancelado' — não pode ser processado (esperado: pagamento_aprovado)."
+  }
+}
+```
+
+```json 409 (chave duplicada)
+{
+  "success": false,
+  "error": {
+    "code": "CONFLICT",
+    "message": "Chave de acesso '35240712345678000199550010000001231234567890' já registrada em outro pedido."
+  }
+}
+```
+
+</ResponseExample>
+
+## Erros
+
+| Status | Code | Situação |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pedido com esse código não existe |
+| `409` | `CONFLICT` | Pedido em status diferente de `pagamento_aprovado` |
+| `409` | `CONFLICT` | Pedido já processado (`hunter_processado_em != null`) |
+| `409` | `CONFLICT` | `chave_acesso` já registrada em outro pedido |
+| `400` | `VALIDATION` | Payload inválido (chave_acesso ≠ 44 dígitos, data_emissao mal-formada, etc) |
+
+## Recuperação de falhas
+
+<Steps>
+  <Step title="Timeout ou 5xx durante a chamada">
+    Não reenvie cegamente. Faça `GET /pedidos?updated_since=...` e cheque se o pedido veio com `hunter_processado_em != null`. Se sim, já foi processado; siga em frente. Se não, reenvie.
+  </Step>
+  <Step title="409 já processado após retry">
+    Log como aviso (não erro). O pedido foi processado num retry anterior que você não confirmou.
+  </Step>
+  <Step title="409 chave duplicada">
+    Investigar antes de qualquer ação. Provavelmente confusão de chave_acesso — não emitir a mesma NF pra 2 pedidos.
+  </Step>
+</Steps>

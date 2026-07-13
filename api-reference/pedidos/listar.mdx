@@ -1,0 +1,317 @@
+---
+title: 'Listar pedidos'
+api: 'GET /api/hunter/v1/pedidos'
+description: 'Pull cursor-based de pedidos em status ativo. Base do fluxo de processamento no ERP.'
+---
+
+## Comportamento
+
+Retorna pedidos que o integrador deve processar ou reconhecer. Modelo **pull cursor-based**: você consulta periodicamente com um cursor (`updated_since`) e recebe as mudanças em ordem cronológica.
+
+## Filtros implícitos (sem override)
+
+- `status IN ('pagamento_aprovado', 'em_separacao', 'enviado', 'entregue', 'cancelado')`
+- Pedido tem **pelo menos 1 item** cuja variante tem `hunter_id` preenchido (filtro em cascata — evita mostrar pedidos que o integrador não sabe processar)
+
+**Dentro do pedido**, só os itens com `hunter_id` aparecem (filtro em cascata). Se pedido tem 5 itens mas só 3 têm variante do integrador, o response traz **apenas os 3**.
+
+## Query params
+
+<ParamField query="updated_since" type="string (ISO 8601 UTC)">
+  Retorna pedidos com `atualizado_em > updated_since`. **Sem** este parâmetro no primeiro pull, retorna tudo (respeitando `limit`).
+</ParamField>
+
+<ParamField query="limit" type="integer" default="50">
+  Máx **200** por request.
+</ParamField>
+
+## Ordenação
+
+`atualizado_em ASC` — cursor incremental. O último pedido do response tem o maior `atualizado_em`; use-o como próximo `updated_since`.
+
+## Payload de cada pedido
+
+<ResponseField name="codigo" type="string" required>
+  Código público do pedido (ex: `PED-000123`). Use nas rotas `/processado` e `/rastreio`.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Um de: `pagamento_aprovado`, `em_separacao`, `enviado`, `entregue`, `cancelado`.
+</ResponseField>
+
+<ResponseField name="criado_em" type="string (ISO 8601 UTC)" required />
+
+<ResponseField name="atualizado_em" type="string (ISO 8601 UTC)" required>
+  **Cursor pro próximo pull.** Guarde o valor do último pedido retornado.
+</ResponseField>
+
+<ResponseField name="pago_em" type="string | null" />
+
+<ResponseField name="hunter_processado_em" type="string | null" required>
+  Timestamp de quando o integrador chamou `POST /processado`. `null` se ainda não processou. **Use pra ignorar replays** — se preenchido, você já processou este pedido em algum pull anterior.
+</ResponseField>
+
+<ResponseField name="total" type="number" required />
+<ResponseField name="subtotal" type="number" required />
+<ResponseField name="frete" type="number" required />
+<ResponseField name="desconto" type="number" required />
+<ResponseField name="cupom_codigo" type="string | null" />
+
+<ResponseField name="forma_pagamento" type="string | null" required>
+  Um de: `pix`, `boleto`, `cartao`. Nunca inclui dados de cartão (número, CVV, bandeira).
+</ResponseField>
+
+<ResponseField name="cliente" type="object" required>
+  Dados fiscais do cliente. **Discrimina PF/PJ.**
+
+  <Expandable title="cliente">
+    <ResponseField name="tipo_pessoa" type="string" required>
+      `fisica` ou `juridica`. Sempre presente, nunca `null`.
+    </ResponseField>
+
+    <ResponseField name="nome" type="string" required>
+      Nome completo (PF) ou **nome fantasia** (PJ).
+    </ResponseField>
+
+    <ResponseField name="email" type="string" required />
+    <ResponseField name="telefone" type="string | null" />
+
+    <ResponseField name="cpf" type="string | null">
+      Preenchido apenas quando `tipo_pessoa='fisica'`. Sempre `null` em PJ.
+    </ResponseField>
+
+    <ResponseField name="cnpj" type="string | null">
+      Preenchido apenas quando `tipo_pessoa='juridica'`. Sempre `null` em PF.
+    </ResponseField>
+
+    <ResponseField name="razao_social" type="string | null">
+      Obrigatório quando PJ, `null` em PF.
+    </ResponseField>
+
+    <ResponseField name="inscricao_estadual" type="string | null">
+      Opcional (`null` = isento/MEI). Sempre `null` em PF.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="endereco_entrega" type="object | null" required>
+  <Expandable title="endereco_entrega">
+    <ResponseField name="razao_social" type="string | null">
+      **Snapshot** da razão social do cliente PJ no momento do pedido. Imutável. `null` em PF ou se cliente era PF na compra.
+    </ResponseField>
+
+    <ResponseField name="cep" type="string" required />
+    <ResponseField name="logradouro" type="string" required />
+    <ResponseField name="numero" type="string" required />
+    <ResponseField name="complemento" type="string | null" />
+    <ResponseField name="bairro" type="string" required />
+    <ResponseField name="cidade" type="string" required />
+    <ResponseField name="uf" type="string (2 chars)" required />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="itens" type="array" required>
+  Apenas itens com `variante.hunter_id` preenchido.
+
+  <Expandable title="itens[]">
+    <ResponseField name="variante_hunter_id" type="string" required />
+    <ResponseField name="sku" type="string" required />
+    <ResponseField name="produto_nome" type="string" required />
+    <ResponseField name="variante_descricao" type="string" required />
+    <ResponseField name="quantidade" type="integer" required />
+    <ResponseField name="preco_unitario" type="number" required />
+    <ResponseField name="subtotal_item" type="number" required />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="rastreio" type="object | null" required>
+  Preenchido apenas quando `status IN ('enviado', 'entregue')` E existe código de rastreio.
+
+  <Expandable title="rastreio">
+    <ResponseField name="codigo" type="string" required />
+    <ResponseField name="transportadora" type="string" required />
+    <ResponseField name="url" type="string | null" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="cancelamento" type="object | null" required>
+  Preenchido apenas quando `status='cancelado'`.
+
+  <Expandable title="cancelamento">
+    <ResponseField name="cancelado_em" type="string (ISO 8601 UTC)" required />
+    <ResponseField name="motivo" type="string | null">
+      `null` em cancelamentos automáticos (ex: expiração de reserva de estoque).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Discriminação por status
+
+Como usar o campo `status` + `hunter_processado_em` no lado do integrador:
+
+| status | hunter_processado_em | Ação sugerida |
+|---|---|---|
+| `pagamento_aprovado` | `null` | **Processar**: baixa estoque + emite NF + `POST /processado` |
+| `pagamento_aprovado` | `!= null` | **Ignorar** (replay — já processou) |
+| `em_separacao` | `!= null` | Aguardar postagem física; quando postar, `POST /rastreio` |
+| `enviado` | `!= null` | **Ignorar** (fim do fluxo pro integrador) |
+| `entregue` | `!= null` | **Ignorar** (fim do fluxo) |
+| `cancelado` | qualquer | Se pedido está na base do integrador, cancela do lado dele. Se não, **ignora**. |
+
+<RequestExample>
+
+```bash cURL — primeiro pull (sem cursor)
+curl -G https://{loja}.com.br/api/hunter/v1/pedidos \
+  --data-urlencode "limit=100" \
+  -H "X-API-Key: hk_..."
+```
+
+```bash cURL — pull incremental
+curl -G https://{loja}.com.br/api/hunter/v1/pedidos \
+  --data-urlencode "updated_since=2026-07-13T14:00:00Z" \
+  --data-urlencode "limit=100" \
+  -H "X-API-Key: hk_..."
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json Pedido em 'pagamento_aprovado' (PF)
+{
+  "codigo": "PED-000123",
+  "status": "pagamento_aprovado",
+  "criado_em": "2026-07-13T09:15:00Z",
+  "atualizado_em": "2026-07-13T09:20:00Z",
+  "hunter_processado_em": null,
+  "pago_em": "2026-07-13T09:20:00Z",
+  "total": 179.80,
+  "subtotal": 159.80,
+  "frete": 20.00,
+  "desconto": 0.00,
+  "cupom_codigo": null,
+  "forma_pagamento": "pix",
+  "cliente": {
+    "tipo_pessoa": "fisica",
+    "nome": "João da Silva",
+    "email": "joao@exemplo.com",
+    "telefone": "35999999999",
+    "cpf": "12345678909",
+    "cnpj": null,
+    "razao_social": null,
+    "inscricao_estadual": null
+  },
+  "endereco_entrega": {
+    "razao_social": null,
+    "cep": "35000000",
+    "logradouro": "Rua Exemplo",
+    "numero": "123",
+    "complemento": "Apto 45",
+    "bairro": "Centro",
+    "cidade": "Cidade Exemplo",
+    "uf": "MG"
+  },
+  "itens": [
+    {
+      "variante_hunter_id": "VAR-001",
+      "sku": "SKU-001-P-PT",
+      "produto_nome": "Produto Exemplo A",
+      "variante_descricao": "P PRETO",
+      "quantidade": 2,
+      "preco_unitario": 89.90,
+      "subtotal_item": 179.80
+    }
+  ],
+  "rastreio": null,
+  "cancelamento": null
+}
+```
+
+```json Pedido em 'enviado' (rastreio preenchido)
+{
+  "codigo": "PED-000124",
+  "status": "enviado",
+  "atualizado_em": "2026-07-15T14:00:00Z",
+  "hunter_processado_em": "2026-07-14T10:00:00Z",
+  "rastreio": {
+    "codigo": "AA123456789BR",
+    "transportadora": "Correios PAC",
+    "url": "https://rastreamento.correios.com.br/app/index.php?objetos=AA123456789BR"
+  },
+  "cancelamento": null
+}
+```
+
+```json Pedido 'cancelado'
+{
+  "codigo": "PED-000125",
+  "status": "cancelado",
+  "atualizado_em": "2026-07-13T09:00:00Z",
+  "hunter_processado_em": null,
+  "rastreio": null,
+  "cancelamento": {
+    "cancelado_em": "2026-07-13T09:00:00Z",
+    "motivo": "Cliente solicitou cancelamento antes do pagamento."
+  }
+}
+```
+
+```json Pedido PJ
+{
+  "cliente": {
+    "tipo_pessoa": "juridica",
+    "nome": "Boutique Exemplo",
+    "email": "compras@boutiqueexemplo.com.br",
+    "telefone": "1133334444",
+    "cpf": null,
+    "cnpj": "11222333000181",
+    "razao_social": "BOUTIQUE EXEMPLO COMÉRCIO LTDA",
+    "inscricao_estadual": "1234567890"
+  },
+  "endereco_entrega": {
+    "razao_social": "BOUTIQUE EXEMPLO COMÉRCIO LTDA",
+    "cep": "01310000",
+    "logradouro": "Av. Paulista",
+    "numero": "1000",
+    "complemento": null,
+    "bairro": "Bela Vista",
+    "cidade": "São Paulo",
+    "uf": "SP"
+  }
+}
+```
+
+</ResponseExample>
+
+## Paginação com cursor
+
+Não use `page` — use `updated_since` como cursor incremental:
+
+```javascript
+async function pullIncremental() {
+  let cursor = getSavedCursor(); // guardado localmente entre execuções
+  const params = new URLSearchParams({ limit: "200" });
+  if (cursor) params.set("updated_since", cursor);
+
+  const res = await fetch(`${BASE_URL}/pedidos?${params}`, {
+    headers: { "X-API-Key": API_KEY },
+  });
+  const { data } = await res.json();
+
+  for (const pedido of data.pedidos) {
+    await processarPedido(pedido);
+    cursor = pedido.atualizado_em; // avança cursor
+  }
+
+  saveCursor(cursor);
+
+  // Se veio `tem_mais: true`, chame de novo sem esperar o próximo tick
+  if (data.paginacao.tem_mais) return pullIncremental();
+}
+```
+
+## Regras adicionais
+
+- `forma_pagamento` é sempre `"pix" | "boleto" | "cartao"`. Nunca inclui dados sensíveis.
+- `endereco_entrega.razao_social` (quando presente) deve ser usado como destinatário principal da etiqueta postal, com `A/C: {destinatario_do_endereco}` como complemento.
+- Se `pedido.hunter_processado_em` está preenchido e você recebeu o pedido de novo, é replay — ignore.

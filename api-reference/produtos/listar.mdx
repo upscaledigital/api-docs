@@ -1,0 +1,160 @@
+---
+title: 'Listar produtos'
+api: 'GET /api/hunter/v1/produtos'
+description: 'Listagem paginada de produtos com hunter_id preenchido.'
+---
+
+## Comportamento
+
+Retorna produtos que o sistema integrado já cadastrou (filtro implícito: `hunter_id IS NOT NULL`). Útil para:
+
+- Verificar se um produto está na loja
+- Descobrir mudanças (via `updated_since`)
+- Confirmar `sku_base` gerado automaticamente
+
+## Query params
+
+<ParamField query="page" type="integer" default="1">
+  Página, começando em 1.
+</ParamField>
+
+<ParamField query="per_page" type="integer" default="50">
+  Itens por página. Máx **500**.
+</ParamField>
+
+<ParamField query="hunter_id" type="string">
+  Filtro por hunter_id específico. Útil pra checar se um produto foi cadastrado.
+</ParamField>
+
+<ParamField query="updated_since" type="string (ISO 8601 UTC)">
+  Retorna apenas produtos com `atualizado_em >= updated_since`.
+</ParamField>
+
+## Payload de cada produto
+
+<ResponseField name="hunter_id" type="string" required>
+  Identificador no sistema integrado.
+</ResponseField>
+
+<ResponseField name="id" type="string (uuid)" required>
+  Identificador interno da loja.
+</ResponseField>
+
+<ResponseField name="sku_base" type="string" required>
+  SKU base.
+</ResponseField>
+
+<ResponseField name="nome" type="string" required />
+
+<ResponseField name="slug" type="string" required>
+  URL amigável do produto na loja (`/produto/{slug}`). Gerado automaticamente do nome, imutável pós-criação.
+</ResponseField>
+
+<ResponseField name="ativo" type="boolean" required>
+  Se o produto está visível pra clientes.
+</ResponseField>
+
+<ResponseField name="atualizado_em" type="string (ISO 8601 UTC)" required>
+  Último UPDATE. Use como cursor pro próximo pull incremental.
+</ResponseField>
+
+<RequestExample>
+
+```bash cURL — primeira página
+curl -G https://{loja}.com.br/api/hunter/v1/produtos \
+  --data-urlencode "page=1" \
+  --data-urlencode "per_page=100" \
+  -H "X-API-Key: hk_..."
+```
+
+```bash cURL — só um produto específico
+curl -G https://{loja}.com.br/api/hunter/v1/produtos \
+  --data-urlencode "hunter_id=PROD-001" \
+  -H "X-API-Key: hk_..."
+```
+
+```bash cURL — atualizados desde
+curl -G https://{loja}.com.br/api/hunter/v1/produtos \
+  --data-urlencode "updated_since=2026-07-13T00:00:00Z" \
+  --data-urlencode "per_page=200" \
+  -H "X-API-Key: hk_..."
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "success": true,
+  "data": {
+    "produtos": [
+      {
+        "hunter_id": "PROD-001",
+        "id": "63117cc5-f047-4a10-ab4c-a60f6617dc89",
+        "sku_base": "SKU-001",
+        "nome": "Produto Exemplo A",
+        "slug": "produto-exemplo-a",
+        "ativo": true,
+        "atualizado_em": "2026-07-13T09:15:00Z"
+      }
+    ],
+    "paginacao": {
+      "total": 143,
+      "pagina": 1,
+      "per_page": 100,
+      "total_paginas": 2
+    }
+  }
+}
+```
+
+</ResponseExample>
+
+## Paginação
+
+Percorra todas as páginas ou pule pra uma específica:
+
+```javascript
+async function *listarTodos() {
+  let page = 1;
+  while (true) {
+    const res = await fetch(
+      `${BASE_URL}/produtos?page=${page}&per_page=200`,
+      { headers: { "X-API-Key": API_KEY } }
+    );
+    const { data } = await res.json();
+    yield* data.produtos;
+    if (page >= data.paginacao.total_paginas) return;
+    page++;
+  }
+}
+
+for await (const produto of listarTodos()) {
+  console.log(produto.hunter_id);
+}
+```
+
+## Sync incremental
+
+Combine com `updated_since` pra pegar só o que mudou:
+
+```javascript
+let cursor = "2026-07-13T00:00:00Z"; // último sync guardado
+
+while (true) {
+  const res = await fetch(
+    `${BASE_URL}/produtos?updated_since=${cursor}&per_page=500`,
+    { headers: { "X-API-Key": API_KEY } }
+  );
+  const { data } = await res.json();
+  if (data.produtos.length === 0) break;
+
+  for (const p of data.produtos) {
+    await processar(p);
+    cursor = p.atualizado_em; // avança cursor
+  }
+
+  if (data.produtos.length < 500) break;
+}
+```

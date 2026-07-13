@@ -1,0 +1,169 @@
+---
+title: 'Registrar rastreio'
+api: 'POST /api/hunter/v1/pedidos/{codigo}/rastreio'
+description: 'Registra ou corrige código de rastreio. Idempotência ABERTA — sobrescreve se pedido já enviado.'
+---
+
+## Comportamento
+
+Chame quando o pedido for postado no correio/transportadora. Este endpoint:
+
+- Registra `codigo_rastreio`, `transportadora` e `url_rastreio` no pedido
+- Se pedido estava em `em_separacao`: **transiciona pra `enviado`**
+- Se pedido já estava em `enviado`: **sobrescreve** o rastreio anterior (correção)
+- Grava histórico em ambos os casos (motivo `rastreio_registrado_pelo_hunter` ou `rastreio_corrigido_pelo_hunter`)
+
+<Tip>
+**Idempotência ABERTA** — diferente de `/processado`. Você pode chamar esse endpoint várias vezes no mesmo pedido enviado pra corrigir código de rastreio errado. Cada chamada bumpa `atualizado_em` e o pedido reaparece no próximo pull de quem estiver monitorando.
+</Tip>
+
+## Path param
+
+<ParamField path="codigo" type="string" required>
+  Código do pedido (ex: `PED-000123`).
+</ParamField>
+
+## Payload
+
+<ParamField body="codigo_rastreio" type="string" required>
+  5–30 caracteres. Sem regex rígido — aceita formato de qualquer transportadora (`AA123456789BR`, `NF123456789`, `TR-2026-000001`, etc).
+</ParamField>
+
+<ParamField body="transportadora" type="string" required>
+  2–100 caracteres. String livre (ex: `"Correios PAC"`, `"Correios SEDEX"`, `"Jadlog Package"`, `"J&T Express"`, `"Loggi Direct"`).
+</ParamField>
+
+<ParamField body="url_rastreio" type="string (URL)">
+  Opcional. Link público de rastreio (será mostrado ao cliente).
+</ParamField>
+
+## Comportamento por status atual do pedido
+
+| Status atual | Ação | Response |
+|---|---|---|
+| `em_separacao` | Registra + transiciona pra `enviado` | `200`, `acao: "registrado"` |
+| `enviado` | Sobrescreve rastreio (correção) | `200`, `acao: "corrigido"` |
+| `entregue` | Rejeitado | `409 CONFLICT` |
+| `cancelado` | Rejeitado | `409 CONFLICT` |
+| `aguardando_pagamento` | Rejeitado | `409 CONFLICT` |
+| `pagamento_recusado` | Rejeitado | `409 CONFLICT` |
+| `pagamento_aprovado` | Rejeitado | `409 CONFLICT` |
+| `devolvido` | Rejeitado | `409 CONFLICT` |
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/pedidos/PED-000123/rastreio \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "codigo_rastreio": "AA123456789BR",
+    "transportadora": "Correios PAC",
+    "url_rastreio": "https://rastreamento.correios.com.br/app/index.php?objetos=AA123456789BR"
+  }'
+```
+
+```bash cURL — correção (código errado antes)
+curl -X POST https://{loja}.com.br/api/hunter/v1/pedidos/PED-000123/rastreio \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "codigo_rastreio": "BB987654321BR",
+    "transportadora": "Correios PAC",
+    "url_rastreio": "https://rastreamento.correios.com.br/app/index.php?objetos=BB987654321BR"
+  }'
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 (registrado)
+{
+  "success": true,
+  "data": {
+    "pedido": {
+      "codigo": "PED-000123",
+      "status": "enviado",
+      "atualizado_em": "2026-07-15T14:23:07Z"
+    },
+    "rastreio": {
+      "codigo": "AA123456789BR",
+      "transportadora": "Correios PAC",
+      "url": "https://rastreamento.correios.com.br/app/index.php?objetos=AA123456789BR"
+    },
+    "acao": "registrado"
+  }
+}
+```
+
+```json 200 (corrigido — segundo chamado no mesmo pedido)
+{
+  "success": true,
+  "data": {
+    "pedido": {
+      "codigo": "PED-000123",
+      "status": "enviado",
+      "atualizado_em": "2026-07-15T14:35:00Z"
+    },
+    "rastreio": {
+      "codigo": "BB987654321BR",
+      "transportadora": "Correios PAC",
+      "url": "https://rastreamento.correios.com.br/app/index.php?objetos=BB987654321BR"
+    },
+    "acao": "corrigido"
+  }
+}
+```
+
+```json 409 (status incompatível)
+{
+  "success": false,
+  "error": {
+    "code": "CONFLICT",
+    "message": "Pedido 'PED-000123' está em status 'pagamento_aprovado' — não pode receber rastreio (esperado: em_separacao ou enviado)."
+  }
+}
+```
+
+```json 404
+{
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Pedido com código 'PED-INEXISTENTE' não encontrado."
+  }
+}
+```
+
+</ResponseExample>
+
+## Detalhes técnicos
+
+<Accordion title="'acao' no response — quando usar?">
+Semanticamente pode ser ignorado — o efeito prático é o mesmo (rastreio ativo). Útil apenas em log local pra distinguir "primeira gravação" vs "correção".
+
+- `registrado`: pedido veio de `em_separacao` e agora está `enviado`
+- `corrigido`: pedido já estava `enviado` e o rastreio foi sobrescrito
+</Accordion>
+
+<Accordion title="postado_em é preservado?">
+Sim. Se você chama `/rastreio` na primeira vez, `postado_em` é setado. Em correções subsequentes, o valor original é preservado (usa `COALESCE(postado_em, NOW())` internamente). Isso mantém a data real da postagem imutável mesmo em correções tardias.
+</Accordion>
+
+<Accordion title="Como o cliente vê?">
+Assim que o rastreio é registrado, a página do pedido no site da loja mostra o código, transportadora e link (se enviado). Cliente é notificado por email/WhatsApp (dependendo da configuração da loja).
+</Accordion>
+
+## Erros
+
+| Status | Code | Situação |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pedido não existe |
+| `409` | `CONFLICT` | Pedido em status incompatível (não em `em_separacao` nem `enviado`) |
+| `400` | `VALIDATION` | Payload inválido (código curto/longo, URL mal-formada, transportadora ausente) |
+
+## Recuperação de falhas
+
+- Timeout durante a chamada → pode reenviar. Se já processou, vira `acao: "corrigido"`; se não, `acao: "registrado"`. Ambos são sucesso.
+- `409 CONFLICT` → **não retente**. Investigue o status atual do pedido via `GET /pedidos?updated_since=...` — se for `entregue` ou `cancelado`, ação impossível.

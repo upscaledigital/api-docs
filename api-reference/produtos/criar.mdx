@@ -1,0 +1,214 @@
+---
+title: 'Criar / atualizar produtos'
+api: 'POST /api/hunter/v1/produtos'
+description: 'Upsert em lote de produtos, com chave de idempotência hunter_id.'
+---
+
+## Comportamento
+
+Envia um lote de produtos. Cada item é:
+
+- **Criado** se `hunter_id` novo (não existe na loja).
+- **Atualizado** se `hunter_id` já cadastrado (só campos "de catálogo" — nome, descrição, marca, gênero, dimensões).
+
+<Note>
+Produto criado entra sempre com `ativo=false`. A loja ativa manualmente após revisar imagens, descrições e vincular a categorias.
+</Note>
+
+## Payload
+
+<ParamField body="produtos" type="array" required>
+  Lista de produtos. **Máx 500 por request.**
+</ParamField>
+
+<ParamField body="produtos[].hunter_id" type="string" required>
+  Identificador único do produto no sistema integrado. Chave de idempotência.
+</ParamField>
+
+<ParamField body="produtos[].nome" type="string" required>
+  Nome do produto. 2–200 caracteres.
+</ParamField>
+
+<ParamField body="produtos[].descricao" type="string">
+  Descrição textual. Até 20.000 caracteres.
+</ParamField>
+
+<ParamField body="produtos[].categoria_hunter_id" type="string">
+  Identificador da categoria no sistema integrado. Se não encontrar na loja, produto é aceito mas aparece um hint em `resultados[].erro`.
+</ParamField>
+
+<ParamField body="produtos[].sku_base" type="string">
+  SKU base do produto. Se ausente, gerado automaticamente (`HTR-{hunter_id}`).
+</ParamField>
+
+<ParamField body="produtos[].marca" type="string" />
+
+<ParamField body="produtos[].genero" type="string">
+  Um de: `feminino`, `masculino`, `unissex`, `infantil`.
+</ParamField>
+
+<ParamField body="produtos[].peso_kg" type="number">
+  Peso em quilos. Mínimo `0.001`.
+</ParamField>
+
+<ParamField body="produtos[].altura_cm" type="number" />
+<ParamField body="produtos[].largura_cm" type="number" />
+<ParamField body="produtos[].profundidade_cm" type="number" />
+
+<Warning>
+**Não envie** o campo `ativo`. Se enviar, response é `HTTP 400 VALIDATION`. A loja controla ativação.
+</Warning>
+
+## Comportamento no UPDATE
+
+Ao atualizar, os seguintes campos **nunca** são tocados (loja é dona):
+
+- `slug`
+- `ordem`
+- `destaque`
+- `lancamento`
+- `ficha_tecnica`
+- `seo_title`, `seo_description`
+- `imagens`
+- `ativo`
+
+Slug é gerado do `nome` na criação e nunca regenerado (não sobrescreve ajustes manuais do admin).
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://{loja}.com.br/api/hunter/v1/produtos \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: hk_..." \
+  -d '{
+    "produtos": [
+      {
+        "hunter_id": "PROD-001",
+        "nome": "Produto Exemplo A",
+        "descricao": "Descrição textual.",
+        "categoria_hunter_id": "CAT-01",
+        "sku_base": "SKU-001",
+        "marca": "Marca Exemplo",
+        "peso_kg": 0.15
+      }
+    ]
+  }'
+```
+
+```javascript Node.js
+const res = await fetch(`${BASE_URL}/produtos`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": process.env.API_KEY,
+  },
+  body: JSON.stringify({
+    produtos: [
+      {
+        hunter_id: "PROD-001",
+        nome: "Produto Exemplo A",
+        descricao: "Descrição textual.",
+        categoria_hunter_id: "CAT-01",
+        sku_base: "SKU-001",
+        marca: "Marca Exemplo",
+        peso_kg: 0.15,
+      },
+    ],
+  }),
+});
+```
+
+```python Python
+import requests
+
+res = requests.post(
+    f"{BASE_URL}/produtos",
+    headers={"X-API-Key": API_KEY},
+    json={
+        "produtos": [
+            {
+                "hunter_id": "PROD-001",
+                "nome": "Produto Exemplo A",
+                "descricao": "Descrição textual.",
+                "categoria_hunter_id": "CAT-01",
+                "sku_base": "SKU-001",
+                "marca": "Marca Exemplo",
+                "peso_kg": 0.15,
+            }
+        ]
+    },
+)
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 (todos OK)
+{
+  "success": true,
+  "data": {
+    "processados": 2,
+    "criados": 1,
+    "atualizados": 1,
+    "erros": 0,
+    "resultados": [
+      { "hunter_id": "PROD-001", "id_loja": "uuid-1", "acao": "criado" },
+      { "hunter_id": "PROD-002", "id_loja": "uuid-2", "acao": "atualizado" }
+    ],
+    "parcial": false,
+    "totalmente_falho": false
+  }
+}
+```
+
+```json 207 (parcial)
+{
+  "success": true,
+  "data": {
+    "processados": 3,
+    "criados": 2,
+    "atualizados": 0,
+    "erros": 1,
+    "resultados": [
+      { "hunter_id": "PROD-001", "id_loja": "uuid-1", "acao": "criado" },
+      { "hunter_id": "PROD-002", "id_loja": "uuid-2", "acao": "criado" },
+      {
+        "hunter_id": "PROD-003",
+        "id_loja": null,
+        "acao": "erro",
+        "erro": "categoria_hunter_id 'CAT-INEXISTENTE' não encontrada."
+      }
+    ],
+    "parcial": true,
+    "totalmente_falho": false
+  }
+}
+```
+
+```json 400 (payload inválido — 'ativo' rejeitado)
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION",
+    "message": "Payload inválido — veja details pra campos com erro.",
+    "details": [
+      {
+        "path": "produtos.0.ativo",
+        "message": "Campo 'ativo' é gerenciado pela loja, não deve ser enviado.",
+        "code": "custom"
+      }
+    ]
+  }
+}
+```
+
+</ResponseExample>
+
+## Erros específicos
+
+| Status | Code | Situação |
+|---|---|---|
+| `400` | `VALIDATION` | Payload malformado, campo `ativo` presente, `nome` fora do range, `hunter_id` ausente |
+| `207` | — | Lote parcial (alguns itens falharam individualmente) |
+| `400` | `VALIDATION` | **Todos** os itens do lote falharam |

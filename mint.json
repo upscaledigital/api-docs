@@ -1,0 +1,100 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "API Upscale",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#1E3A5F",
+    "light": "#4B7DB8",
+    "dark": "#0B2340",
+    "anchors": {
+      "from": "#1E3A5F",
+      "to": "#4B7DB8"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Suporte",
+      "url": "mailto:api@upscaledigital.com.br"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Solicitar chave",
+    "url": "mailto:api@upscaledigital.com.br?subject=Solicitação%20de%20chave%20de%20API"
+  },
+  "anchors": [
+    {
+      "name": "Referência",
+      "icon": "code",
+      "url": "api-reference"
+    },
+    {
+      "name": "Guias",
+      "icon": "book-open",
+      "url": "guides"
+    },
+    {
+      "name": "Postman",
+      "icon": "download",
+      "url": "https://github.com/upscaledigital/api-docs/raw/main/postman/upscale-api.postman_collection.json"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Começando",
+      "pages": [
+        "introduction",
+        "authentication",
+        "rate-limits",
+        "errors"
+      ]
+    },
+    {
+      "group": "Guias",
+      "pages": [
+        "guides/fluxo-catalogo",
+        "guides/fluxo-estoque",
+        "guides/fluxo-pedidos"
+      ]
+    },
+    {
+      "group": "Produtos",
+      "pages": [
+        "api-reference/produtos/criar",
+        "api-reference/produtos/listar"
+      ]
+    },
+    {
+      "group": "Variantes",
+      "pages": [
+        "api-reference/variantes/upsert"
+      ]
+    },
+    {
+      "group": "Estoque",
+      "pages": [
+        "api-reference/estoque/atualizar"
+      ]
+    },
+    {
+      "group": "Preços",
+      "pages": [
+        "api-reference/precos/atualizar"
+      ]
+    },
+    {
+      "group": "Pedidos",
+      "pages": [
+        "api-reference/pedidos/listar",
+        "api-reference/pedidos/processado",
+        "api-reference/pedidos/rastreio"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "website": "https://upscaledigital.com.br"
+  }
+}

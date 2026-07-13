@@ -1,0 +1,143 @@
+---
+title: 'Códigos de erro'
+description: 'Códigos padronizados no campo error.code + mapeamento pros status HTTP.'
+---
+
+## Formato do erro
+
+Toda resposta de erro segue o mesmo shape:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION",
+    "message": "Payload inválido — veja details pra campos com erro.",
+    "details": [
+      {
+        "path": "produtos.0.hunter_id",
+        "message": "hunter_id obrigatório.",
+        "code": "custom"
+      }
+    ]
+  }
+}
+```
+
+- `code` — string estável (**não muda entre versões**). Programe contra isto.
+- `message` — texto humano. Pode mudar entre releases (é pra log/debug).
+- `details` — opcional, presente em `VALIDATION`. Array com um item por campo problemático.
+
+## Códigos possíveis
+
+| Code | Descrição |
+|---|---|
+| `AUTH_MISSING` | Header `X-API-Key` ausente. |
+| `AUTH_INVALID` | Chave inválida ou revogada. |
+| `RATE_LIMIT` | Excedeu 100 req/min. |
+| `VALIDATION` | Payload malformado (JSON inválido, campo obrigatório ausente, tipo errado, valor fora do range). |
+| `NOT_FOUND` | Recurso solicitado não existe (ex: `POST /pedidos/PED-INEXISTENTE/processado`). |
+| `CONFLICT` | Estado incompatível (ex: pedido já processado, chave de acesso duplicada). |
+| `SERVER_ERROR` | Erro interno. Vale retentativa com backoff. |
+
+## Códigos HTTP
+
+| Status | Significado |
+|---|---|
+| `200` | Sucesso total. |
+| `207` | **Multi-Status** — lote parcialmente processado. Alguns itens do lote falharam individualmente; ver campo `resultados[]` na `data`. |
+| `400` | Payload inválido OU lote inteiro falhou. |
+| `401` | Autenticação ausente/inválida. |
+| `404` | Recurso não encontrado. |
+| `409` | Conflito de estado. |
+| `429` | Rate limit. |
+| `500` | Erro interno. |
+
+## `207 Multi-Status` em detalhe
+
+Endpoints de escrita em lote (`POST /produtos`, `/variantes`, `/estoque`, `/precos`) processam cada item individualmente. Se **alguns** falham, o response é `HTTP 207` com o mesmo formato de sucesso — mas com contagem de erros e `resultados[].acao === "erro"` em cada item problemático.
+
+```json
+{
+  "success": true,
+  "data": {
+    "processados": 3,
+    "criados": 1,
+    "atualizados": 1,
+    "erros": 1,
+    "resultados": [
+      { "hunter_id": "A", "id_loja": "uuid-1", "acao": "criado" },
+      { "hunter_id": "B", "id_loja": "uuid-2", "acao": "atualizado" },
+      {
+        "hunter_id": "C",
+        "id_loja": null,
+        "acao": "erro",
+        "erro": "categoria_hunter_id 'X' não encontrada."
+      }
+    ],
+    "parcial": true,
+    "totalmente_falho": false
+  }
+}
+```
+
+Comportamento programático:
+
+- Se `parcial === true`: pelo menos 1 item falhou, pelo menos 1 sucedeu → **retrata só os itens que falharam** (não o lote inteiro)
+- Se `totalmente_falho === true`: nenhum item passou → response vem com `HTTP 400`; investigar antes de retentar
+
+## Quando retentar
+
+<Tip>
+Regra geral: **retente `5xx` e `429`**. **Não retente** `4xx` — problema é no payload ou no estado, retentar sem mudar nada gera o mesmo erro.
+</Tip>
+
+| Code / Status | Retentar? | Como |
+|---|---|---|
+| `AUTH_MISSING`, `AUTH_INVALID` | ❌ Nunca | Corrija a chave |
+| `RATE_LIMIT` (`429`) | ✅ Sim | Aguarde `Retry-After` |
+| `VALIDATION` (`400`) | ❌ Nunca | Ajuste o payload |
+| `NOT_FOUND` (`404`) | ⚠️ Depende | Só se você espera que o recurso será criado por outro processo em breve (pouco comum). Se não, propague o erro. |
+| `CONFLICT` (`409`) | ❌ Nunca | Investigue o estado. Cada endpoint documenta suas condições de conflito. |
+| `SERVER_ERROR` (`500`) | ✅ Sim | Backoff exponencial: 1s, 2s, 4s, 8s, 16s. Máx 5 tentativas. |
+| `207 Multi-Status` | ⚠️ Parcial | Retente **só os itens que falharam**, não o lote inteiro. |
+
+## Exemplo de tratamento
+
+```javascript
+async function robustPost(url, body, apiKey) {
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+
+    // 4xx (exceto 429) — não retentar
+    if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+      throw new APIError(json.error);
+    }
+
+    // 429 — aguardar Retry-After
+    if (res.status === 429) {
+      const wait = parseInt(res.headers.get("Retry-After") ?? "60", 10);
+      await sleep(wait * 1000);
+      continue;
+    }
+
+    // 5xx — backoff exponencial
+    if (res.status >= 500) {
+      if (attempt === MAX_RETRIES) throw new APIError(json.error);
+      await sleep(Math.pow(2, attempt) * 1000);
+      continue;
+    }
+
+    return json;
+  }
+}
+```

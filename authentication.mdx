@@ -1,0 +1,120 @@
+---
+title: 'Autenticação'
+description: 'Todo request precisa de uma chave de API válida no header X-API-Key.'
+---
+
+## Chaves de API
+
+Autenticação usa **chaves estáticas** com prefixo reconhecível e alta entropia. Cada chave é vinculada a uma loja específica.
+
+### Formato
+
+```
+hk_<43 caracteres base64url>
+```
+
+- Prefixo `hk_` (fixo)
+- 43 caracteres base64url após o prefixo (não usa `+`, `/`, ou `=`)
+- Total: ~46 caracteres
+
+Exemplo:
+
+```
+hk_owKMhBLZRb3OhSkKbiJ-Ru4gKZr2A_yUkjyebhpc3BI
+```
+
+### Como obter
+
+Chaves são geradas pela equipe de admin da loja parceira (rota interna `/admin/hunter/api-keys`). Peça pelo canal combinado (email, WhatsApp, Slack).
+
+Quando gerar, você receberá:
+
+- A **chave completa** (uma única vez — a partir dali só o prefixo de 12 caracteres é visível)
+- Nome descritivo (pra identificar em quais integrações a chave é usada)
+- Data de criação
+
+<Warning>
+A chave completa é exibida **uma única vez** no momento da criação. Guarde num cofre seguro (Vault, 1Password, AWS Secrets Manager, etc). Não é possível recuperar depois.
+</Warning>
+
+### Como enviar
+
+Header obrigatório em todo request:
+
+```
+X-API-Key: hk_owKMhBLZRb3OhSkKbiJ-Ru4gKZr2A_yUkjyebhpc3BI
+```
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET https://{loja}.com.br/api/hunter/v1/produtos \
+  -H "X-API-Key: hk_..."
+```
+
+```javascript Node.js
+const res = await fetch(
+  "https://{loja}.com.br/api/hunter/v1/produtos",
+  { headers: { "X-API-Key": process.env.UPSCALE_API_KEY } }
+);
+```
+
+```python Python
+import requests
+res = requests.get(
+    "https://{loja}.com.br/api/hunter/v1/produtos",
+    headers={"X-API-Key": os.environ["UPSCALE_API_KEY"]},
+)
+```
+
+</CodeGroup>
+
+## Segurança
+
+### O que a chave concede
+
+Uma chave dá acesso a **todos os endpoints** da API, no escopo da loja onde foi gerada. Ela não segrega leitura de escrita nem endpoint por endpoint.
+
+Tratamento equivalente a credenciais de root: rotacione periodicamente e guarde no cofre.
+
+### Revogação
+
+Chaves comprometidas podem ser revogadas imediatamente pela equipe da loja. Um request feito com chave revogada recebe:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "AUTH_INVALID",
+    "message": "Chave revogada ou inativa."
+  }
+}
+```
+
+com `HTTP 401`.
+
+### Rotação recomendada
+
+1. Solicite geração de uma nova chave
+2. Distribua a nova chave nos sistemas produtivos
+3. Confirme que a antiga não é mais usada
+4. Peça revogação da antiga
+
+## Erros de autenticação
+
+| Situação | Status | Code |
+|---|---|---|
+| Header `X-API-Key` ausente | `401` | `AUTH_MISSING` |
+| Chave não existe | `401` | `AUTH_INVALID` |
+| Chave revogada | `401` | `AUTH_INVALID` |
+
+Requests que caem nesses casos **não** consomem rate limit (é validado antes).
+
+## Armazenamento local
+
+Boas práticas pra guardar a chave no seu integrador:
+
+- **Não** commite em código versionado
+- Use variável de ambiente ou cofre (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, etc)
+- Em ambientes CI/CD, use secrets do provedor (GitHub Actions Secrets, GitLab Variables, etc)
+- Log de request nunca deve gravar o valor da chave — só o prefixo (`hk_owKMhBLZR…`) pra correlação
